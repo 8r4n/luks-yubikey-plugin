@@ -59,63 +59,7 @@ sudo cryptsetup luksDump /dev/nvme0n1p3 | head -5
 
 ### 2.1 Enroll First YubiKey
 
-```plantuml
-@startuml enrollment-activity
-!theme plain
-skinparam backgroundColor #FFFFFF
-
-title Enrollment Procedure — Activity Diagram
-
-start
-
-:Insert YubiKey into USB port;
-
-:Run enrollment script;
-note right
-  sudo ./enroll.sh /dev/nvme0n1p3
-end note
-
-:Script validates:
-  - Block device exists
-  - Device is LUKS2
-  - Running as root
-  - fido2-token detects YubiKey;
-
-if (Validation passes?) then (yes)
-  :systemd-cryptenroll starts;
-  :Enter existing LUKS passphrase;
-
-  if (Passphrase correct?) then (yes)
-    :YubiKey prompts for FIDO2 PIN;
-    :Enter PIN on keyboard;
-    :Touch YubiKey when LED flashes;
-    :YubiKey generates key pair;
-    :Keyslot and token metadata written;
-    :Enrollment complete;
-
-    :Patch crypttab;
-    note right
-      sudo ./patch-crypttab.sh
-    end note
-
-    :Regenerate initramfs;
-    note right
-      sudo dracut -f
-    end note
-
-    :Reboot and test;
-    stop
-  else (no)
-    :Error: wrong passphrase;
-    stop
-  endif
-else (no)
-  :Error: validation failed;
-  stop
-endif
-
-@enduml
-```
+![Enrollment Procedure — Activity Diagram](diagrams/enrollment-activity.svg)
 
 **Step-by-step:**
 
@@ -226,48 +170,7 @@ sudo dracut -f
 
 ### 4.3 Replace a Lost YubiKey
 
-```plantuml
-@startuml lost-key-recovery
-!theme plain
-skinparam backgroundColor #FFFFFF
-
-title Lost YubiKey Recovery Procedure
-
-start
-
-:Boot with passphrase fallback;
-note right
-  Enter LUKS passphrase
-  at boot prompt
-end note
-
-:Identify lost key's keyslot;
-note right
-  sudo cryptsetup luksDump /dev/nvme0n1p3
-end note
-
-:Remove lost key's FIDO2 keyslot;
-note right
-  sudo ./unenroll.sh -s <N> /dev/nvme0n1p3
-end note
-
-:Insert new replacement YubiKey;
-
-:Enroll new YubiKey;
-note right
-  sudo ./enroll.sh /dev/nvme0n1p3
-end note
-
-:Rebuild initramfs;
-note right
-  sudo dracut -f
-end note
-
-:Test reboot with new YubiKey;
-
-stop
-@enduml
-```
+![Lost YubiKey Recovery Procedure](diagrams/lost-key-recovery.svg)
 
 ### 4.4 Change YubiKey FIDO2 PIN
 

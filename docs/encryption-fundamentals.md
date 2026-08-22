@@ -36,36 +36,7 @@ The LUKS2 **master key** (also called the volume key) is a random 512-bit value 
 
 The master key is never stored in plaintext on disk. Instead, it is encrypted (wrapped) by each keyslot's derived key. This architecture allows multiple keyslots — each with a different passphrase, FIDO2 credential, or TPM binding — to independently decrypt the same master key.
 
-```plantuml
-@startuml master-key-wrapping
-!theme plain
-skinparam backgroundColor #FFFFFF
-
-title Master Key Wrapping in LUKS2
-
-rectangle "Master Key\n(512-bit random)" as mk #Pink
-rectangle "Keyslot 0: Passphrase" as ks0 #LightGreen {
-    rectangle "argon2id(passphrase, salt)\n→ derived key" as dk0
-    rectangle "AES-wrap(derived_key, master_key)\n→ encrypted master key" as ewk0
-}
-rectangle "Keyslot 1: FIDO2 YubiKey" as ks1 #LightBlue {
-    rectangle "hmac-secret(salt)\n→ derived key" as dk1
-    rectangle "AES-wrap(derived_key, master_key)\n→ encrypted master key" as ewk1
-}
-
-dk0 --> ewk0
-dk1 --> ewk1
-ewk0 --> mk : decrypts to
-ewk1 --> mk : decrypts to
-mk --> mk : used by dm-crypt\nfor AES-256-XTS
-
-note bottom of mk
-  Same master key — different wrappers.
-  Adding/removing a keyslot does NOT
-  re-encrypt the disk.
-end note
-@enduml
-```
+![Master Key Wrapping in LUKS2](diagrams/master-key-wrapping.svg)
 
 ---
 
@@ -124,35 +95,7 @@ FIDO2 authenticators use **ECDSA on the NIST P-256 curve** (secp256r1) for crede
 
 During enrollment, the YubiKey generates a new P-256 key pair:
 
-```plantuml
-@startuml key-generation
-!theme plain
-skinparam backgroundColor #FFFFFF
-
-title FIDO2 Key Generation (makeCredential)
-
-participant "Host" as host
-participant "YubiKey\nSecure Element" as se
-
-host -> se : makeCredential(\n  rpId="io.systemd.cryptsetup",\n  userId=<device-uuid>,\n  hmac-secret=true\n)
-
-se -> se : Generate P-256 key pair\n  private_key = random scalar\n  public_key = private_key × G
-se -> se : Create credential_id\n  (encrypted private_key handle\n  or slot reference)
-se -> se : Enable hmac-secret\n  for this credential
-
-se --> host : {\n  credential_id,\n  public_key,\n  attestation_signature\n}
-
-note over se
-  Private key NEVER leaves
-  the secure element.
-
-  credential_id is opaque:
-  either an encrypted handle
-  (non-resident) or a slot
-  index (resident).
-end note
-@enduml
-```
+![FIDO2 Key Generation (makeCredential)](diagrams/key-generation.svg)
 
 ### 4.3 Authentication (getAssertion)
 
@@ -171,46 +114,7 @@ At boot, the host sends the stored `credential_id` and a random challenge to the
 
 ### 5.1 Header Structure
 
-```plantuml
-@startuml luks2-header
-!theme plain
-skinparam backgroundColor #FFFFFF
-
-title LUKS2 On-Disk Header Structure
-
-rectangle "LUKS2 Binary Header" {
-    rectangle "Magic: LUKS\\xba\\xbe" as magic
-    rectangle "Version: 2" as ver
-    rectangle "UUID: <device-uuid>" as uuid
-    rectangle "Header Size: 16 MiB" as hsize
-}
-
-rectangle "JSON Metadata Area" {
-    rectangle "config" as cfg {
-        rectangle "json_size: ..." as js
-    }
-
-    rectangle "keyslots" as kss {
-        rectangle "0: { type: luks2,\n     kdf: argon2id,\n     af: luks1,\n     area: {...} }" as ks0
-        rectangle "1: { type: luks2,\n     kdf: argon2id,\n     af: luks1,\n     area: {...} }" as ks1
-    }
-
-    rectangle "tokens" as toks {
-        rectangle "0: { type: systemd-fido2,\n     keyslots: [\"1\"],\n     fido2-credential: \"<base64>\",\n     fido2-salt: \"<base64>\",\n     fido2-rp: \"io.systemd.cryptsetup\",\n     fido2-clientPin-required: true }" as tok0
-    }
-
-    rectangle "segments" as segs {
-        rectangle "0: { type: crypt,\n     encryption: aes-xts-plain64,\n     sector_size: 4096 }" as seg0
-    }
-}
-
-rectangle "Keyslot Data Area\n(Binary — encrypted master keys)" as kda
-
-magic --> cfg
-kss --> kda : keyslots reference\noffsets in data area
-toks --> kss : tokens reference\nkeyslots by index
-@enduml
-```
+![LUKS2 On-Disk Header Structure](diagrams/luks2-header.svg)
 
 ### 5.2 Token Metadata (FIDO2)
 
@@ -237,52 +141,7 @@ This metadata is stored **unencrypted** in the LUKS2 JSON header area. This is s
 
 ### 6.1 Trust Relationships
 
-```plantuml
-@startuml trust-chain
-!theme plain
-skinparam backgroundColor #FFFFFF
-
-title Trust Chain — FIDO2 YubiKey LUKS2
-
-rectangle "Root of Trust" {
-    rectangle "YubiKey Secure Element\n(SLE78 / Infineon)" as se #LightGreen
-    note right of se
-      Hardware root of trust.
-      Private keys generated
-      and stored here.
-      Tamper-resistant.
-    end note
-}
-
-rectangle "Derived Trust" {
-    rectangle "FIDO2 Credential\n(P-256 key pair)" as cred
-    rectangle "hmac-secret Output\n(32-byte derived key)" as hmac
-    rectangle "LUKS2 Keyslot\n(wrapped master key)" as ks
-    rectangle "Master Key\n(volume encryption)" as mk
-    rectangle "Encrypted Data\n(AES-256-XTS)" as data
-}
-
-rectangle "User Trust" {
-    rectangle "FIDO2 PIN\n(knowledge factor)" as pin
-    rectangle "Physical Touch\n(presence factor)" as touch
-}
-
-se --> cred : generates & stores
-pin --> se : gates access\n(verified on-device)
-touch --> se : gates operations\n(capacitive sensor)
-cred --> hmac : hmac-secret extension
-hmac --> ks : unlocks keyslot
-ks --> mk : decrypts master key
-mk --> data : encrypts/decrypts disk
-
-note bottom of data
-  Breaking the trust chain
-  requires compromising BOTH
-  the YubiKey hardware AND
-  the user's PIN knowledge.
-end note
-@enduml
-```
+![Trust Chain — FIDO2 YubiKey LUKS2](diagrams/trust-chain.svg)
 
 ### 6.2 What Each Component Protects Against
 

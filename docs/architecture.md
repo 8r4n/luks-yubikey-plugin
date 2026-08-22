@@ -64,28 +64,7 @@ This document defines the system architecture for integrating Yubico YubiKey FID
 
 ### 3.1 System Context Diagram
 
-```plantuml
-@startuml system-context
-!theme plain
-skinparam backgroundColor #FFFFFF
-
-title System Context — FIDO2 YubiKey LUKS2 Integration
-
-actor "System Administrator" as admin
-rectangle "YubiKey 5\n(FIDO2 Authenticator)" as yubikey #LightBlue
-rectangle "Fedora Linux System" as system {
-    rectangle "LUKS2 Encrypted\nBlock Device" as luks
-    rectangle "systemd-cryptenroll\n& systemd-cryptsetup" as systemd
-    rectangle "Enrollment Scripts\n(this project)" as scripts
-}
-
-admin --> scripts : Runs enrollment
-admin --> yubikey : Touches & enters PIN
-yubikey <--> systemd : CTAP2 over USB HID
-scripts --> systemd : Invokes enrollment
-systemd --> luks : Manages keyslots\n& token metadata
-@enduml
-```
+![System Context — FIDO2 YubiKey LUKS2 Integration](diagrams/system-context.svg)
 
 ### 3.2 Stakeholders
 
@@ -102,57 +81,7 @@ systemd --> luks : Manages keyslots\n& token metadata
 
 ### 4.1 Component Diagram
 
-```plantuml
-@startuml component-architecture
-!theme plain
-skinparam backgroundColor #FFFFFF
-
-title Component Architecture — FIDO2 YubiKey LUKS2
-
-package "User Space — Enrollment" {
-    [enroll.sh] as enroll
-    [unenroll.sh] as unenroll
-    [patch-crypttab.sh] as patchcrypt
-}
-
-package "System Services" {
-    [systemd-cryptenroll] as cryptenroll
-    [systemd-cryptsetup] as cryptsetup_svc
-    [dracut initramfs] as dracut
-}
-
-package "Kernel / Hardware" {
-    [dm-crypt] as dmcrypt
-    [USB HID Driver] as usbhid
-    [Block Device\n(NVMe/SATA)] as blockdev
-}
-
-package "External Hardware" {
-    [YubiKey 5\nFIDO2 Authenticator] as yubikey
-}
-
-database "LUKS2 Header" as luksheader {
-    [Keyslot 0\n(Passphrase)] as ks0
-    [Keyslot 1..N\n(FIDO2)] as ks1n
-    [Token Metadata\n(fido2 credentials)] as tokenmeta
-}
-
-enroll --> cryptenroll : invokes
-unenroll --> dmcrypt : luksKillSlot
-patchcrypt --> dracut : triggers rebuild
-
-cryptenroll --> yubikey : CTAP2\nmakeCredential
-cryptenroll --> luksheader : writes keyslot\n& token metadata
-cryptsetup_svc --> yubikey : CTAP2\ngetAssertion
-cryptsetup_svc --> luksheader : reads token,\nunlocks keyslot
-cryptsetup_svc --> dmcrypt : provides\nmaster key
-
-dmcrypt --> blockdev : encrypted I/O
-yubikey <--> usbhid : USB HID
-
-dracut ..> cryptsetup_svc : includes in\ninitramfs
-@enduml
-```
+![Component Architecture — FIDO2 YubiKey LUKS2](diagrams/component-architecture.svg)
 
 ### 4.2 Component Descriptions
 
@@ -173,145 +102,15 @@ dracut ..> cryptsetup_svc : includes in\ninitramfs
 
 ### 5.1 Enrollment Sequence
 
-```plantuml
-@startuml enrollment-sequence
-!theme plain
-skinparam backgroundColor #FFFFFF
-
-title Enrollment Sequence — FIDO2 YubiKey into LUKS2
-
-actor "Admin" as admin
-participant "enroll.sh" as script
-participant "systemd-cryptenroll" as cryptenroll
-participant "YubiKey\n(FIDO2)" as yubikey
-participant "LUKS2 Header" as luks
-
-admin -> script : sudo ./enroll.sh /dev/nvme0n1p3
-activate script
-
-script -> script : Validate: LUKS2, root, block device
-script -> script : fido2-token -L (detect YubiKey)
-
-script -> cryptenroll : --fido2-device=auto\n--fido2-with-client-pin=yes
-activate cryptenroll
-
-cryptenroll -> admin : Prompt: existing LUKS passphrase
-admin -> cryptenroll : enters passphrase
-cryptenroll -> luks : Verify passphrase\n(unlock existing keyslot)
-
-cryptenroll -> yubikey : CTAP2 makeCredential\n(relying party = "io.systemd.cryptsetup")
-activate yubikey
-yubikey -> admin : Prompt: YubiKey PIN
-admin -> yubikey : enters PIN
-yubikey -> admin : Prompt: touch YubiKey
-admin -> yubikey : touches
-yubikey -> yubikey : Generate key pair\nin secure element
-yubikey --> cryptenroll : credential ID + public key
-deactivate yubikey
-
-cryptenroll -> cryptenroll : Derive keyslot key\nfrom FIDO2 hmac-secret
-cryptenroll -> luks : Write new keyslot\n(encrypted master key)
-cryptenroll -> luks : Write token metadata\n(credential ID, salt, RP ID)
-
-cryptenroll --> script : success
-deactivate cryptenroll
-
-script --> admin : Enrollment complete\nNext: patch-crypttab, dracut -f
-deactivate script
-@enduml
-```
+![Enrollment Sequence — FIDO2 YubiKey into LUKS2](diagrams/enrollment-sequence.svg)
 
 ### 5.2 Boot Unlock Sequence
 
-```plantuml
-@startuml boot-unlock-sequence
-!theme plain
-skinparam backgroundColor #FFFFFF
-
-title Boot Unlock Sequence — FIDO2 YubiKey LUKS2
-
-participant "UEFI/BIOS" as bios
-participant "GRUB2\nBootloader" as grub
-participant "dracut\ninitramfs" as initramfs
-participant "systemd-cryptsetup" as cryptsetup
-participant "YubiKey\n(FIDO2)" as yubikey
-participant "LUKS2 Header" as luks
-participant "dm-crypt" as dmcrypt
-actor "User" as user
-
-bios -> grub : Load bootloader
-grub -> initramfs : Load kernel + initramfs
-
-initramfs -> cryptsetup : Start cryptsetup service\n(reads /etc/crypttab)
-activate cryptsetup
-
-cryptsetup -> luks : Read LUKS2 header\n& token metadata
-cryptsetup -> cryptsetup : Found fido2 token?\nYes — try FIDO2 first
-
-cryptsetup -> yubikey : CTAP2 getAssertion\n(credential ID from token metadata)
-activate yubikey
-
-yubikey -> user : Prompt: PIN
-user -> yubikey : enters PIN
-yubikey -> user : Prompt: touch
-user -> yubikey : touches
-yubikey -> yubikey : Sign challenge with\nprivate key (secure element)
-yubikey --> cryptsetup : assertion + hmac-secret output
-deactivate yubikey
-
-cryptsetup -> cryptsetup : Derive keyslot key\nfrom hmac-secret
-cryptsetup -> luks : Unlock keyslot\n(decrypt master key)
-cryptsetup -> dmcrypt : Provide master key\n(activate dm-crypt mapping)
-
-dmcrypt --> initramfs : Root filesystem available
-initramfs -> initramfs : Switch root\nContinue boot
-
-deactivate cryptsetup
-
-note over cryptsetup
-  If YubiKey is absent or fails:
-  Falls back to passphrase prompt
-end note
-@enduml
-```
+![Boot Unlock Sequence — FIDO2 YubiKey LUKS2](diagrams/boot-unlock-sequence.svg)
 
 ### 5.3 Multi-Key Enrollment
 
-```plantuml
-@startuml multi-key
-!theme plain
-skinparam backgroundColor #FFFFFF
-
-title Multi-Key LUKS2 Keyslot Layout
-
-rectangle "LUKS2 Header" {
-    rectangle "Keyslot 0\nType: passphrase\nPBKDF: argon2id" as ks0 #LightGreen
-    rectangle "Keyslot 1\nType: FIDO2\nYubiKey #1 (Primary)" as ks1 #LightBlue
-    rectangle "Keyslot 2\nType: FIDO2\nYubiKey #2 (Backup)" as ks2 #LightBlue
-    rectangle "Token 0\nType: systemd-fido2\ncredential_id: <key1_id>\nsalt: <random>" as t0 #LightYellow
-    rectangle "Token 1\nType: systemd-fido2\ncredential_id: <key2_id>\nsalt: <random>" as t1 #LightYellow
-    rectangle "Master Key\n(AES-256)" as mk #Pink
-}
-
-ks0 --> mk : decrypts
-ks1 --> mk : decrypts
-ks2 --> mk : decrypts
-t0 --> ks1 : references
-t1 --> ks2 : references
-
-note bottom of ks0
-  Recovery: always keep
-  at least one passphrase
-  keyslot active
-end note
-
-note bottom of ks2
-  Each YubiKey enrollment
-  creates an independent
-  keyslot + token pair
-end note
-@enduml
-```
+![Multi-Key LUKS2 Keyslot Layout](diagrams/multi-key.svg)
 
 ---
 
@@ -328,37 +127,7 @@ end note
 
 ### 6.2 CTAP2 Protocol Flow
 
-```plantuml
-@startuml ctap2-flow
-!theme plain
-skinparam backgroundColor #FFFFFF
-
-title CTAP2 Protocol Messages — FIDO2 Enrollment & Unlock
-
-participant "Host\n(systemd-cryptenroll)" as host
-participant "YubiKey\n(Authenticator)" as auth
-
-== Enrollment (makeCredential) ==
-
-host -> auth : authenticatorClientPIN\n(getPINToken with PIN)
-auth --> host : pinToken
-
-host -> auth : authenticatorMakeCredential\n  rpId: "io.systemd.cryptsetup"\n  user: { id: <device-uuid> }\n  extensions: { hmac-secret: true }\n  options: { rk: false, uv: true }
-auth -> auth : Generate P-256 key pair\nStore in secure element
-auth --> host : attestation object\n  credentialId\n  publicKey\n  hmac-secret enabled
-
-== Boot Unlock (getAssertion) ==
-
-host -> auth : authenticatorClientPIN\n(getPINToken with PIN)
-auth --> host : pinToken
-
-host -> auth : authenticatorGetAssertion\n  rpId: "io.systemd.cryptsetup"\n  allowList: [{ credentialId }]\n  extensions: {\n    hmac-secret: {\n      salt: <from LUKS2 token>\n    }\n  }
-auth -> auth : Sign with private key\nCompute HMAC(salt, credential-key)
-auth --> host : assertion\n  signature\n  hmac-secret output (32 bytes)
-
-host -> host : Use hmac-secret output\nas LUKS2 keyslot passphrase
-@enduml
-```
+![CTAP2 Protocol Messages — FIDO2 Enrollment & Unlock](diagrams/ctap2-flow.svg)
 
 ---
 
@@ -366,47 +135,7 @@ host -> host : Use hmac-secret output\nas LUKS2 keyslot passphrase
 
 ### 7.1 Threat Model
 
-```plantuml
-@startuml threat-model
-!theme plain
-skinparam backgroundColor #FFFFFF
-
-title Threat Model — FIDO2 YubiKey LUKS2
-
-rectangle "Assets" #LightGreen {
-    (Disk Master Key) as mk
-    (User Data on Disk) as data
-    (YubiKey Private Key) as privkey
-    (FIDO2 PIN) as pin
-}
-
-rectangle "Threats" #LightCoral {
-    (T1: Stolen Laptop\n— disk removed) as t1
-    (T2: Stolen YubiKey\n— no PIN) as t2
-    (T3: Evil Maid\n— boot tampering) as t3
-    (T4: Cold Boot\n— RAM extraction) as t4
-    (T5: Keyslot\nBrute Force) as t5
-}
-
-rectangle "Mitigations" #LightBlue {
-    (M1: AES-256-XTS\ndisk encryption) as m1
-    (M2: FIDO2 PIN\nrequirement) as m2
-    (M3: Secure Boot +\nTPM binding — v2) as m3
-    (M4: RAM encryption\n— kernel support) as m4
-    (M5: argon2id PBKDF\nfor passphrase slot) as m5
-}
-
-t1 --> m1 : mitigated by
-t2 --> m2 : mitigated by
-t3 --> m3 : mitigated by (future)
-t4 --> m4 : mitigated by
-t5 --> m5 : mitigated by
-
-mk --> data : protects
-privkey --> mk : unlocks (via FIDO2)
-pin --> privkey : gates access to
-@enduml
-```
+![Threat Model — FIDO2 YubiKey LUKS2](diagrams/threat-model.svg)
 
 ### 7.2 Security Boundaries
 
@@ -432,52 +161,7 @@ pin --> privkey : gates access to
 
 ### 8.1 Deployment Diagram
 
-```plantuml
-@startuml deployment
-!theme plain
-skinparam backgroundColor #FFFFFF
-
-title Deployment Architecture — Fedora Linux with FIDO2 LUKS2
-
-node "Fedora Linux Workstation" {
-    artifact "/boot/efi\n(EFI System Partition)" as esp
-    artifact "/boot\n(ext4, unencrypted)" as boot
-
-    node "LUKS2 Encrypted Partition\n/dev/nvme0n1p3" as lukspart {
-        artifact "dm-crypt mapping\n/dev/mapper/luks-<uuid>" as dmmap
-        artifact "LVM or Btrfs\nRoot Filesystem" as rootfs
-    }
-
-    artifact "/etc/crypttab" as crypttab
-    artifact "/etc/dracut.conf.d/" as dracutconf
-
-    component "systemd-cryptsetup\n(in initramfs)" as cryptsetup
-    component "libfido2.so\n(in initramfs)" as libfido2
-}
-
-node "YubiKey 5 NFC" as yubikey {
-    component "FIDO2 App\n(CTAP2)" as fido2app
-    component "Secure Element\n(SLE78)" as se
-}
-
-cloud "USB Port" as usb
-
-cryptsetup --> crypttab : reads config
-cryptsetup --> lukspart : reads header
-cryptsetup <--> libfido2 : FIDO2 API
-libfido2 <--> usb : USB HID
-usb <--> yubikey
-
-esp --> boot : chainloads
-boot --> cryptsetup : kernel loads initramfs
-
-note right of se
-  Private keys never
-  leave the secure element.
-  PIN is verified on-device.
-end note
-@enduml
-```
+![Deployment Architecture — Fedora Linux with FIDO2 LUKS2](diagrams/deployment.svg)
 
 ### 8.2 File Layout
 
@@ -507,45 +191,7 @@ end note
 
 ### 9.1 LUKS2 Device States
 
-```plantuml
-@startuml state-machine
-!theme plain
-skinparam backgroundColor #FFFFFF
-
-title LUKS2 Device State Machine
-
-[*] --> Locked : System power on
-
-state Locked {
-    [*] --> WaitingForToken : cryptsetup reads header
-    WaitingForToken --> FIDO2Detected : YubiKey inserted
-    WaitingForToken --> PassphrasePrompt : No FIDO2 device\n(timeout)
-    FIDO2Detected --> PINEntry : CTAP2 getAssertion
-    PINEntry --> TouchWait : PIN verified
-    PINEntry --> PINRetry : Wrong PIN\n(max 8 retries)
-    PINRetry --> PINEntry : retry
-    PINRetry --> PassphrasePrompt : PIN locked out
-    TouchWait --> KeyslotUnlock : Touch confirmed
-}
-
-state Unlocked {
-    [*] --> Active : dm-crypt mapping created
-    Active --> Mounted : Root filesystem mounted
-}
-
-KeyslotUnlock --> Unlocked : Master key decrypted
-PassphrasePrompt --> Unlocked : Correct passphrase
-
-Unlocked --> [*] : System shutdown
-
-note right of PINRetry
-  YubiKey locks FIDO2 app
-  after 8 consecutive
-  wrong PIN attempts.
-  Requires reset to recover.
-end note
-@enduml
-```
+![LUKS2 Device State Machine](diagrams/state-machine.svg)
 
 ---
 
@@ -553,32 +199,7 @@ end note
 
 ### 10.1 Planned v2 Architecture
 
-```plantuml
-@startuml tpm-fido2-future
-!theme plain
-skinparam backgroundColor #FFFFFF
-
-title Future Architecture — TPM2 + FIDO2 Combined Binding (v2)
-
-rectangle "Three-Factor Unlock" {
-    rectangle "Factor 1: Platform\nTPM2 PCR Binding\n(Secure Boot chain)" as f1 #LightGreen
-    rectangle "Factor 2: Possession\nYubiKey FIDO2\n(Hardware token)" as f2 #LightBlue
-    rectangle "Factor 3: Knowledge\nFIDO2 PIN\n(User secret)" as f3 #LightYellow
-}
-
-rectangle "LUKS2 Keyslot\n(combined policy)" as ks #Pink
-
-f1 --> ks : TPM unseal\n(PCR 7,11,14)
-f2 --> ks : FIDO2 hmac-secret
-f3 --> f2 : gates authenticator
-
-note bottom of ks
-  systemd-cryptenroll --tpm2-device=auto --fido2-device=auto
-  NOT YET IMPLEMENTED — requires systemd 256+ and
-  policy composition support in cryptenroll
-end note
-@enduml
-```
+![Future Architecture — TPM2 + FIDO2 Combined Binding (v2)](diagrams/tpm-fido2-future.svg)
 
 ### 10.2 TPM+FIDO2 Design Considerations
 
