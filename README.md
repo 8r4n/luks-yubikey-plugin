@@ -86,6 +86,18 @@ cryptsetup luksDump /dev/nvme0n1p3 | grep -A1 "Keyslot"
 3. The initramfs (dracut) includes FIDO2 libraries and prompts for YubiKey touch + PIN
 4. On success, the LUKS volume unlocks; on failure/timeout, falls back to passphrase
 
+## Documentation
+
+Comprehensive system engineering documentation is available in the [`docs/`](docs/) directory:
+
+| Document | Description |
+|----------|-------------|
+| [System Architecture](docs/architecture.md) | Component architecture, data flows, security boundaries, UML diagrams, vendor references, threat model, and future TPM+FIDO2 design |
+| [Encryption Fundamentals](docs/encryption-fundamentals.md) | Cryptographic principles (AES-256-XTS, argon2id, ECDSA P-256, FIDO2 hmac-secret), LUKS2 on-disk format, trust chain analysis |
+| [Operations Guide](docs/operations-guide.md) | Step-by-step enrollment/unenrollment procedures, boot operations, key management, recovery, troubleshooting, verification checklists |
+
+All diagrams use [PlantUML](https://plantuml.com/) notation and can be rendered with any PlantUML-compatible tool.
+
 ## Future: TPM + YubiKey
 
 A future version will support binding both TPM2 and FIDO2 together:
