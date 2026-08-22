@@ -75,9 +75,11 @@ cryptsetup luksDump /dev/nvme0n1p3 | grep -A1 "Keyslot"
 | Script | Purpose |
 |--------|---------|
 | `enroll.sh` | Enroll a YubiKey FIDO2 token into LUKS2 |
-| `unenroll.sh` | Remove FIDO2 keyslot(s) |
-| `patch-crypttab.sh` | Add `fido2-device=auto` to `/etc/crypttab` |
-| `test/test-loopback.sh` | Non-destructive test on a loopback device |
+| `enroll-tpm-fido2.sh` | Enroll combined TPM2 + FIDO2 token (3-factor) |
+| `unenroll.sh` | Remove FIDO2 or TPM2+FIDO2 keyslot(s) |
+| `patch-crypttab.sh` | Add device options to `/etc/crypttab` (supports `--mode tpm2-fido2`) |
+| `test/test-loopback.sh` | Non-destructive FIDO2 test on a loopback device |
+| `test/test-tpm-fido2.sh` | Non-destructive TPM2+FIDO2 test on a loopback device |
 
 ## How It Works
 
@@ -98,15 +100,43 @@ Comprehensive system engineering documentation is available in the [`docs/`](doc
 
 All diagrams use [PlantUML](https://plantuml.com/) notation and can be rendered with any PlantUML-compatible tool.
 
-## Future: TPM + YubiKey
+## TPM2 + YubiKey (Combined 3-Factor)
 
-A future version will support binding both TPM2 and FIDO2 together:
+For maximum security, bind both TPM2 and FIDO2 into a single keyslot. This requires all three factors simultaneously: platform integrity (TPM2), physical possession (YubiKey), and knowledge (PIN).
+
+**Additional requirements:** systemd 253+, TPM2 hardware enabled in BIOS, `tpm2-tss` package.
+
 ```bash
-# NOT YET IMPLEMENTED — planned for v2
-systemd-cryptenroll /dev/nvme0n1p3 --tpm2-device=auto --fido2-device=auto
+sudo dnf install tpm2-tss tpm2-tools
+
+# 1. Enroll combined TPM2 + YubiKey
+sudo ./enroll-tpm-fido2.sh /dev/nvme0n1p3
+
+# 2. Patch crypttab for combined mode
+sudo ./patch-crypttab.sh --mode tpm2-fido2
+
+# 3. Regenerate initramfs
+sudo dracut -f
+
+# 4. Reboot and test
 ```
 
-This would provide three-factor unlock (TPM platform binding + YubiKey possession + PIN knowledge) and is being tracked for a future release.
+Options:
+```bash
+# Custom PCR policy (bind to Secure Boot + shim)
+sudo ./enroll-tpm-fido2.sh --tpm2-pcrs 7+14 /dev/nvme0n1p3
+
+# Add TPM2 PIN for 4-factor authentication
+sudo ./enroll-tpm-fido2.sh --tpm2-with-pin /dev/nvme0n1p3
+```
+
+**Note:** If TPM2 PCRs change (firmware update, Secure Boot policy change), the keyslot stops working. Always keep a passphrase slot as fallback. Re-enroll after such changes.
+
+To remove combined keyslots:
+```bash
+sudo ./unenroll.sh --tpm2-fido2 /dev/nvme0n1p3
+sudo dracut -f
+```
 
 ## License
 
