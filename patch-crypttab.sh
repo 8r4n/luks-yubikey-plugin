@@ -1,11 +1,41 @@
 #!/usr/bin/env bash
-# patch-crypttab.sh — Add fido2-device=auto to /etc/crypttab for LUKS2 FIDO2 unlock at boot
+# patch-crypttab.sh — Add FIDO2/TPM2 device options to /etc/crypttab for LUKS2 unlock at boot
 set -euo pipefail
 
 CRYPTTAB="/etc/crypttab"
 
 error() { echo "ERROR: $*" >&2; exit 1; }
 info()  { echo ":: $*"; }
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [OPTIONS]
+
+Patch /etc/crypttab to enable FIDO2 or TPM2+FIDO2 unlock at boot.
+
+Options:
+  -h, --help            Show this help message
+  --mode <mode>         Unlock mode: fido2 (default) or tpm2-fido2
+EOF
+    exit 0
+}
+
+MODE="fido2"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage ;;
+        --mode) MODE="$2"; shift 2 ;;
+        -*) error "Unknown option: $1" ;;
+        *) break ;;
+    esac
+done
+
+case "$MODE" in
+    fido2) DEVICE_OPTS="fido2-device=auto" ;;
+    tpm2-fido2) DEVICE_OPTS="tpm2-device=auto,fido2-device=auto" ;;
+    *) error "Unknown mode: $MODE. Use 'fido2' or 'tpm2-fido2'." ;;
+esac
 
 [[ $EUID -eq 0 ]] || error "Must run as root."
 [[ -f "$CRYPTTAB" ]] || error "$CRYPTTAB not found."
@@ -22,7 +52,7 @@ while IFS= read -r line; do
         continue
     fi
 
-    # If line already has fido2-device, leave it alone
+    # If line already has the target device options, leave it alone
     if echo "$line" | grep -q "fido2-device"; then
         echo "$line"
         continue
@@ -30,7 +60,7 @@ while IFS= read -r line; do
 
     # Check if this entry uses a LUKS device (has luks in options or no options)
     if echo "$line" | grep -qiE "luks|none"; then
-        # Append fido2-device=auto,fido2-with-client-pin=yes to the options field
+        # Append device options to the options field
         # crypttab format: name device keyfile options
         name=$(echo "$line" | awk '{print $1}')
         device=$(echo "$line" | awk '{print $2}')
@@ -38,9 +68,9 @@ while IFS= read -r line; do
         options=$(echo "$line" | awk '{print $4}')
 
         if [[ -z "$options" ]] || [[ "$options" == "none" ]] || [[ "$options" == "luks" ]]; then
-            options="luks,fido2-device=auto"
+            options="luks,$DEVICE_OPTS"
         else
-            options="${options},fido2-device=auto"
+            options="${options},$DEVICE_OPTS"
         fi
 
         echo "$name $device $keyfile $options"
@@ -53,7 +83,7 @@ done < "$CRYPTTAB" > "${CRYPTTAB}.new"
 mv "${CRYPTTAB}.new" "$CRYPTTAB"
 
 if [[ "$changed" == true ]]; then
-    info "Updated $CRYPTTAB with fido2-device=auto"
+    info "Updated $CRYPTTAB with $DEVICE_OPTS"
     info "Current contents:"
     cat "$CRYPTTAB"
     info ""

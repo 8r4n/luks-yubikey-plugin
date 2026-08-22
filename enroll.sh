@@ -100,7 +100,4 @@ info "  2. Regenerate initramfs: sudo dracut -f"
 info "  3. Reboot and test"
 info ""
 info "To enroll an additional YubiKey, insert it and run this script again."
-
-# NOTE: Future versions will support TPM+FIDO2 combination for:
-#   systemd-cryptenroll --tpm2-device=auto --fido2-device=auto
-# This requires careful policy binding and is planned for a future release.
+info "For combined TPM2+FIDO2, use: sudo ./enroll-tpm-fido2.sh"
