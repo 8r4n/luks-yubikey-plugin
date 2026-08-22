@@ -99,7 +99,42 @@ sudo ./enroll.sh /dev/nvme0n1p3
 # (already configured from first enrollment)
 ```
 
-### 2.3 Verify Enrollment
+### 2.3 Enroll Combined TPM2 + FIDO2 (3-Factor)
+
+Requires: systemd 253+, TPM2 hardware, YubiKey.
+
+```bash
+# Step 1: Verify TPM2 and YubiKey
+ls /dev/tpmrm0        # TPM2 device must exist
+fido2-token -L        # YubiKey must be detected
+
+# Step 2: Enroll combined keyslot
+sudo ./enroll-tpm-fido2.sh /dev/nvme0n1p3
+# — Enter your existing LUKS passphrase when prompted
+# — Enter your YubiKey FIDO2 PIN when prompted
+# — Touch the YubiKey when its LED flashes
+
+# Step 3: Patch crypttab for combined mode
+sudo ./patch-crypttab.sh --mode tpm2-fido2
+
+# Step 4: Rebuild initramfs
+sudo dracut -f
+
+# Step 5: Reboot
+sudo reboot
+```
+
+**PCR re-enrollment after firmware/Secure Boot changes:**
+```bash
+# Remove old combined keyslot
+sudo ./unenroll.sh --tpm2-fido2 /dev/nvme0n1p3
+
+# Re-enroll with updated PCR values
+sudo ./enroll-tpm-fido2.sh /dev/nvme0n1p3
+sudo dracut -f
+```
+
+### 2.4 Verify Enrollment
 
 ```bash
 # List all keyslots and tokens

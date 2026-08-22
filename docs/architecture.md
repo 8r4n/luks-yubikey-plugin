@@ -20,13 +20,13 @@ This document defines the system architecture for integrating Yubico YubiKey FID
 ### 1.2 Scope
 
 - FIDO2/CTAP2 credential enrollment into LUKS2 token metadata via `systemd-cryptenroll`
-- Boot-time unlock via `systemd-cryptsetup` with FIDO2 device auto-detection
+- Combined TPM2 + FIDO2 enrollment in a single keyslot (systemd 253+)
+- Boot-time unlock via `systemd-cryptsetup` with FIDO2 and/or TPM2 device auto-detection
 - Multi-key enrollment for operational redundancy
 - Passphrase fallback for recovery scenarios
 
 ### 1.3 Out of Scope (Planned Future Work)
 
-- TPM2 + FIDO2 combined binding (planned for v2)
 - Remote/network-based unlock
 - YubiKey HMAC-SHA1 challenge-response mode (legacy approach)
 
@@ -197,19 +197,24 @@ This document defines the system architecture for integrating Yubico YubiKey FID
 
 ## 10. Future Architecture: TPM + FIDO2
 
-### 10.1 Planned v2 Architecture
+### 10.1 TPM2 + FIDO2 Combined Architecture
 
-![Future Architecture — TPM2 + FIDO2 Combined Binding (v2)](diagrams/tpm-fido2-future.svg)
+The combined TPM2+FIDO2 mode creates a single LUKS2 keyslot that requires both:
+1. **TPM2 unsealing** — the TPM releases a secret only if PCR measurements match the enrollment-time policy
+2. **FIDO2 assertion** — the YubiKey must be present and PIN entered
+
+This is implemented via `systemd-cryptenroll --tpm2-device=auto --fido2-device=auto` (systemd 253+).
 
 ### 10.2 TPM+FIDO2 Design Considerations
 
 | Consideration | Detail |
 |---------------|--------|
-| PCR Policy | Bind to PCR 7 (Secure Boot), 11 (systemd-stub), 14 (shim MOK) |
-| Composition | TPM unseal provides first key half; FIDO2 provides second |
-| Fallback | If TPM PCRs change (kernel update), passphrase still works |
-| Enrollment | Requires two sequential enrollment steps or combined systemd-cryptenroll call |
-| systemd version | Requires systemd 256+ for combined FIDO2+TPM2 in single keyslot |
+| PCR Policy | Default: PCR 7 (Secure Boot state). Optional: 7+14 (shim MOK) |
+| Composition | Single keyslot — both TPM2 unseal and FIDO2 assertion required atomically |
+| Fallback | If TPM PCRs change (firmware/kernel update), passphrase slot still works |
+| Enrollment | Single `systemd-cryptenroll` call with both `--tpm2-device` and `--fido2-device` |
+| systemd version | Requires systemd 253+ for combined FIDO2+TPM2 in single keyslot |
+| Recovery | Re-enroll after PCR-breaking changes; keep passphrase slot active |
 
 ---
 
